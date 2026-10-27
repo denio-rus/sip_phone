@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Документация — SIP-телефон</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="docs-page">
+<header class="docs-bar">
+  <a class="back" href="/">← Телефон</a>
+  <span class="title">Документация проекта</span>
+  <span class="dl">Скачать:</span>
+  <a href="/docs/sip_phone.epub" download title="книга epub (вся документация)">epub</a>
+  <a href="/docs/api-reference.md" download title="весь API в markdown">api-reference.md</a>
+  <a href="/docs/readme.md" download title="README в markdown">readme.md</a>
+  <a href="/docs/llms.txt" download title="машиночитаемое оглавление (txt)">llms.txt</a>
+  <a class="open-new" href="/docs/index.html" target="_blank" rel="noopener"
+     title="открыть HTML-документацию отдельной вкладкой">в новой вкладке ↗</a>
+</header>
+<div class="docs-fallback hidden" id="docs-fallback">
+  Браузер не пустил документацию во фрейм (политика безопасности: расширение,
+  прокси или открытие файла страницы с диска). Скачивание снизу доступно, а
+  читать — <a href="/docs/index.html" target="_blank" rel="noopener">в новой вкладке ↗</a>
+  или <a href="/docs/index.html">здесь, без фрейма</a>.
+</div>
+<iframe class="docs-frame" id="docs-frame" src="/docs/index.html" title="HTML-документация проекта"></iframe>
+<script>
+// если фрейм заблокирован (XFO/CSP-политика клиента), в нём остаётся about:blank —
+// показываем панель со ссылками вместо пустой области
+const frame = document.getElementById("docs-frame");
+const fallback = document.getElementById("docs-fallback");
+frame.addEventListener("load", () => {
+  let blocked;
+  try {
+    blocked = !frame.contentDocument || frame.contentDocument.URL === "about:blank";
+  } catch {
+    blocked = true; // кросс-документный доступ к фрейму запрещён
+  }
+  if (blocked) {
+    frame.classList.add("hidden");
+    fallback.classList.remove("hidden");
+  }
+});
+
+// тема — как в остальных окнах: сохранённая настройка + синхронизация через localStorage
+(function () {
+  const saved = localStorage.getItem("sip_phone_theme") ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = saved;
+  addEventListener("storage", (e) => {
+    if (e.key === "sip_phone_theme" && e.newValue) {
+      document.documentElement.dataset.theme = e.newValue;
+    }
+  });
+})();
+</script>
+</body>
+</html>

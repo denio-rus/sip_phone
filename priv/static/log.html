@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIP-лог</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="log-page">
+  <h1>Лог SIP</h1>
+  <div class="log-toolbar">
+    <span class="state" id="state-line">подключение…</span>
+    <span style="flex:1"></span>
+    <button id="btn-clear" class="secondary">Очистить</button>
+    <label class="theme-switch">
+      <span>Тёмная тема</span>
+      <input type="checkbox" id="theme-toggle">
+      <span class="slider"></span>
+    </label>
+  </div>
+  <div id="log"></div>
+</main>
+<script src="/log.js"></script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIP-телефон</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="phone">
+  <h1>SIP-телефон</h1>
+
+  <section class="card status-card">
+    <div class="status-row">
+      <span class="label">Регистрация</span>
+      <span id="reg-status" class="badge gray">не зарегистрирован</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Аккаунт</span>
+      <span id="account" class="value">—</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Линия</span>
+      <span id="call-status" class="badge gray">свободно</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Абонент</span>
+      <span id="remote" class="value">—</span>
+    </div>
+    <div id="error" class="error hidden"></div>
+  </section>
+
+  <section class="card">
+    <h2>Аккаунт</h2>
+    <label>SIP-сервер <input id="server" type="text" placeholder="sip.example.com:5060"></label>
+    <label>Номер <input id="number" type="text" placeholder="100"></label>
+    <label>Пароль <input id="password" type="password" placeholder="••••"></label>
+    <div class="btn-row">
+      <button id="btn-register" class="primary">Зарегистрировать</button>
+      <button id="btn-unregister" class="secondary hidden">Снять с регистрации</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Вызов</h2>
+    <label>Номер вызываемого <input id="callee" type="text" placeholder="101"></label>
+    <div class="btn-row">
+      <button id="btn-call" class="primary" disabled>Позвонить</button>
+      <button id="btn-cancel" class="warn hidden">Отменить</button>
+      <button id="btn-answer" class="success hidden">Ответить</button>
+      <button id="btn-reject" class="danger hidden">Отклонить</button>
+      <button id="btn-hangup" class="danger hidden">Положить трубку</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="btn-row">
+      <button id="btn-log" class="secondary">Открыть лог SIP</button>
+      <button id="btn-explorer" class="secondary">Проводник</button>
+    </div>
+  </section>
+
+  <section id="explorer" class="card hidden">
+    <h2>Структура проекта</h2>
+    <div class="fs-wrap">
+      <div class="fs-tree" id="fs-tree"></div>
+      <div class="fs-preview hidden" id="fs-preview">
+        <div class="fs-preview-head">
+          <span id="fs-preview-title"></span>
+          <button id="fs-preview-close" class="secondary">✕ Закрыть</button>
+        </div>
+        <pre id="fs-preview-body"></pre>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <label class="theme-switch">
+      <span>Тёмная тема</span>
+      <input type="checkbox" id="theme-toggle">
+      <span class="slider"></span>
+    </label>
+    <a class="docs-link" href="/docs">документация</a>
+  </footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
