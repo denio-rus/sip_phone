@@ -30,8 +30,9 @@ defmodule FakeSIPServer do
     cond do
       String.starts_with?(head, "REGISTER") ->
         if String.contains?(data, "Authorization:") do
+          # binding = адрес, с которого пришёл REGISTER (порт телефона нам не известен заранее)
           send_resp(sock, ip, from_port, data, 200, "OK", [
-            {"contact", "<sip:100@127.0.0.1:5080>;expires=300"}
+            {"contact", "<sip:100@#{:inet.ntoa(ip)}:#{from_port}>;expires=300"}
           ])
         else
           send_resp(sock, ip, from_port, data, 401, "Unauthorized", [
@@ -89,9 +90,11 @@ defmodule IntegrationTest do
 
   alias SipPhone.SIP.Stack
 
+  # фейковый SIP-сервер тестов всегда на 5090 (боевой сервер телефон не трогает);
+  # локальный порт телефона и веб-порт — из Application env (config/test.exs),
+  # боевые 5080/8212 с ним не пересекаются
   @server_port 5090
   @phone_ip {127, 0, 0, 1}
-  @phone_port 5080
 
   setup_all do
     pid = FakeSIPServer.start(@server_port)
@@ -160,6 +163,13 @@ defmodule IntegrationTest do
     eventually(fn -> Stack.state()[field] == value end, timeout)
   end
 
+  # локальный SIP-порт телефона — из публичного local_endpoint (фактически
+  # забинден сокетом по config/test.exs), а не из боевой константы 5080
+  defp phone_port do
+    [_, port] = String.split(Stack.state().local_endpoint, ":")
+    String.to_integer(port)
+  end
+
   test "1. регистрация: 401 -> digest -> 200" do
     :ok = Stack.register("127.0.0.1:#{@server_port}", "100", "secret")
     wait_state(:registration, "registered")
@@ -183,7 +193,7 @@ defmodule IntegrationTest do
     {:ok, sock} = :gen_udp.open(5091, [:binary, active: true])
 
     invite =
-      "INVITE sip:100@127.0.0.1:#{@phone_port} SIP/2.0\r\n" <>
+      "INVITE sip:100@127.0.0.1:#{phone_port()} SIP/2.0\r\n" <>
         "Via: SIP/2.0/UDP 127.0.0.1:5091;branch=z9hG4bKfake1\r\n" <>
         "From: <sip:101@127.0.0.1>;tag=fakefrom1\r\n" <>
         "To: <sip:100@127.0.0.1>\r\n" <>
@@ -193,7 +203,7 @@ defmodule IntegrationTest do
         "Content-Type: application/sdp\r\n" <>
         "Content-Length: 0\r\n\r\n"
 
-    :gen_udp.send(sock, @phone_ip, @phone_port, invite)
+    :gen_udp.send(sock, @phone_ip, phone_port(), invite)
 
     assert_receive {:udp, ^sock, _, _, resp100}, 3000
     assert resp100 =~ "100 Trying"
@@ -220,18 +230,18 @@ defmodule IntegrationTest do
         "Call-ID: fake-incoming-1@127.0.0.1\r\n" <>
         "CSeq: 1 ACK\r\nContent-Length: 0\r\n\r\n"
 
-    :gen_udp.send(sock, @phone_ip, @phone_port, ack)
+    :gen_udp.send(sock, @phone_ip, phone_port(), ack)
     Process.sleep(200)
 
     bye =
-      "BYE sip:100@127.0.0.1:#{@phone_port} SIP/2.0\r\n" <>
+      "BYE sip:100@127.0.0.1:#{phone_port()} SIP/2.0\r\n" <>
         "Via: SIP/2.0/UDP 127.0.0.1:5091;branch=z9hG4bKbye1\r\n" <>
         "From: <sip:101@127.0.0.1>;tag=fakefrom1\r\n" <>
         "To: <sip:100@127.0.0.1>#{tag}\r\n" <>
         "Call-ID: fake-incoming-1@127.0.0.1\r\n" <>
         "CSeq: 2 BYE\r\nContent-Length: 0\r\n\r\n"
 
-    :gen_udp.send(sock, @phone_ip, @phone_port, bye)
+    :gen_udp.send(sock, @phone_ip, phone_port(), bye)
     assert_receive {:udp, ^sock, _, _, bye_resp}, 3000
     assert bye_resp =~ "200 OK"
     wait_state(:call, "idle")
@@ -242,7 +252,7 @@ defmodule IntegrationTest do
     {:ok, sock} = :gen_udp.open(5092, [:binary, active: true])
 
     invite =
-      "INVITE sip:100@127.0.0.1:#{@phone_port} SIP/2.0\r\n" <>
+      "INVITE sip:100@127.0.0.1:#{phone_port()} SIP/2.0\r\n" <>
         "Via: SIP/2.0/UDP 127.0.0.1:5092;branch=z9hG4bKfake2\r\n" <>
         "From: <sip:102@127.0.0.1>;tag=fakefrom2\r\n" <>
         "To: <sip:100@127.0.0.1>\r\n" <>
@@ -252,7 +262,7 @@ defmodule IntegrationTest do
         "Content-Type: application/sdp\r\n" <>
         "Content-Length: 0\r\n\r\n"
 
-    :gen_udp.send(sock, @phone_ip, @phone_port, invite)
+    :gen_udp.send(sock, @phone_ip, phone_port(), invite)
     assert_receive {:udp, ^sock, _, _, "SIP/2.0 100" <> _}, 3000
     wait_state(:call, "incoming")
 
@@ -274,7 +284,7 @@ defmodule IntegrationTest do
     wait_state(:call, "idle", 6000)
   end
 
-  test "7. веб: страница и API на 8212" do
+  test "7. веб: страница и API (порт из Application env)" do
     assert http_get("/") =~ "SIP-"
     assert {:ok, _} = Jason.decode(http_get("/api/state"))
     assert http_get("/log") =~ "SIP-"
@@ -329,7 +339,9 @@ defmodule IntegrationTest do
   end
 
   defp http_raw(path) do
-    {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", 8212, [:binary, active: false, packet: :raw])
+    port = Application.fetch_env!(:sip_phone, :web_port)
+
+    {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false, packet: :raw])
     :ok = :gen_tcp.send(sock, "GET #{path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
     data = collect(sock, "")
     :gen_tcp.close(sock)

@@ -5,6 +5,9 @@ defmodule SipPhone.SIP.Stack do
   ретрансляция запросов до финального ответа, ретрансляция финальных ответов
   на INVITE до ACK.
 
+  Локальный UDP-порт — из `:sip_phone, :sip_port` (`SIP_PHONE_SIP_PORT`,
+  боевая норма 5080; в test-окружении своё — см. `config/test.exs`).
+
   Все отправленные/полученные сообщения публикуются через `SipPhone.PubSub`
   как `{:sip_log, entry}`; состояние опрашивается через `state/0`
   (WS-клиенты поллют его — см. `SipPhone.Web.WS`).
@@ -92,7 +95,7 @@ defmodule SipPhone.SIP.Stack do
 
   @impl true
   def init(_) do
-    port = String.to_integer(System.get_env("SIP_PHONE_SIP_PORT", "5080"))
+    port = Application.fetch_env!(:sip_phone, :sip_port)
     {:ok, socket} = :gen_udp.open(port, [:binary, active: true])
     {:ok, local_port} = :inet.port(socket)
     store_local_endpoint("127.0.0.1", local_port)

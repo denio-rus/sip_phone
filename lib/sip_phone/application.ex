@@ -2,14 +2,16 @@ defmodule SipPhone.Application do
   @moduledoc """
   Точка входа OTP-приложения: поднимает супервизор с PubSub, кольцевым
   буфером лога, SIP-стеком и HTTP-сервером Cowboy. Порт веб-интерфейса —
-  из `SIP_PHONE_WEB_PORT` (по умолчанию 8212).
+  из `:sip_phone, :web_port` (`SIP_PHONE_WEB_PORT`, боевая норма 8212;
+  в test-окружении свои значения, чтобы `mix test` не конфликтовал с
+  запущенным `./run.sh`).
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
-    web_port = String.to_integer(System.get_env("SIP_PHONE_WEB_PORT", "8212"))
+    web_port = Application.fetch_env!(:sip_phone, :web_port)
 
     children = [
       SipPhone.PubSub,
