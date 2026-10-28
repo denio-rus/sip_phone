@@ -80,6 +80,7 @@ test/integration_test.exs — интеграционные тесты с fake-SI
 
 ```bash
 mix test
+ERL_LIBS=/opt/erlang-27/lib/erlang/lib mix dialyzer   # статические типы (см. CLAUDE.md: на системном OTP нет dialyzer)
 ```
 
 Состав: 10 doctest'ов публичного API (парсер/билдер `SipPhone.SIP.Message`,
