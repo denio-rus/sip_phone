@@ -272,15 +272,10 @@ defmodule SipPhone.SIP.Message do
   def put_header(%__MODULE__{headers: hs} = msg, name, value) do
     name = String.downcase(name)
 
-    cond do
-      Enum.any?(hs, fn {n, _} -> n == name end) ->
-        %{
-          msg
-          | headers: Enum.map(hs, fn {n, v} -> if(n == name, do: {n, value}, else: {n, v}) end)
-        }
-
-      true ->
-        %{msg | headers: hs ++ [{name, value}]}
+    if Enum.any?(hs, fn {n, _} -> n == name end) do
+      %{msg | headers: Enum.map(hs, fn {n, v} -> if(n == name, do: {n, value}, else: {n, v}) end)}
+    else
+      %{msg | headers: hs ++ [{name, value}]}
     end
   end
 
@@ -334,8 +329,7 @@ defmodule SipPhone.SIP.Message do
       nil ->
         name
         |> String.split("-")
-        |> Enum.map(&String.capitalize/1)
-        |> Enum.join("-")
+        |> Enum.map_join("-", &String.capitalize/1)
 
       c ->
         c

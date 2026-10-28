@@ -80,6 +80,7 @@ test/integration_test.exs — интеграционные тесты с fake-SI
 
 ```bash
 mix test
+mix credo --strict                                     # стиль (конфиг .credo.exs, lib/)
 ERL_LIBS=/opt/erlang-27/lib/erlang/lib mix dialyzer   # статические типы (см. CLAUDE.md: на системном OTP нет dialyzer)
 ```
 

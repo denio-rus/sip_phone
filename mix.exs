@@ -31,9 +31,10 @@ defmodule SipPhone.MixProject do
       {:websock_adapter, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      # статическая проверка типов (mix dialyzer), используется hook'ом
-      # .claude/hooks/elixir-verify.sh
-      {:dialyxir, "~> 1.4", only: :dev, runtime: false}
+      # статическая проверка типов (mix dialyzer) и стиля (mix credo),
+      # используются hook'ом .claude/hooks/elixir-verify.sh
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: :dev, runtime: false}
     ]
   end
 end

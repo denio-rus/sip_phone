@@ -63,26 +63,26 @@ defmodule SipPhone.Web.FileBrowser do
   @spec read(String.t() | nil) :: {:ok, preview()} | {:error, :forbidden | :not_found}
   def read(rel) do
     with {:ok, path} <- resolve(rel) do
-      if File.regular?(path) do
-        size = File.stat!(path).size
-        {:ok, raw} = File.read(path)
-        chunk = binary_part(raw, 0, min(byte_size(raw), @preview_limit))
+      if File.regular?(path), do: preview(path, rel), else: {:error, :not_found}
+    end
+  end
 
-        if binary?(chunk) do
-          {:ok, %{path: rel, size: size, binary: true, truncated: false, content: nil}}
-        else
-          {:ok,
-           %{
-             path: rel,
-             size: size,
-             binary: false,
-             truncated: byte_size(raw) > @preview_limit,
-             content: chunk
-           }}
-        end
-      else
-        {:error, :not_found}
-      end
+  defp preview(path, rel) do
+    size = File.stat!(path).size
+    {:ok, raw} = File.read(path)
+    chunk = binary_part(raw, 0, min(byte_size(raw), @preview_limit))
+
+    if binary?(chunk) do
+      {:ok, %{path: rel, size: size, binary: true, truncated: false, content: nil}}
+    else
+      {:ok,
+       %{
+         path: rel,
+         size: size,
+         binary: false,
+         truncated: byte_size(raw) > @preview_limit,
+         content: chunk
+       }}
     end
   end
 
