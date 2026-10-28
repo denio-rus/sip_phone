@@ -8,6 +8,9 @@ defmodule SipPhone.Web.FileBrowser do
   """
 
   @tech_dirs ~w(deps _build)
+  # фича «Показ скрытых папок»: из dot-записей в дереве остаётся только этот
+  # каталог (настройки агентов проекта должны быть видны в «Проводнике»)
+  @visible_hidden_dirs ~w(.claude)
   @preview_limit 256 * 1024
 
   @type entry :: %{name: String.t(), type: String.t(), size: non_neg_integer()}
@@ -30,7 +33,8 @@ defmodule SipPhone.Web.FileBrowser do
   @doc """
   Список содержимого каталога относительно корня проекта ("" — корень).
   Каталоги первыми, затем файлы, в алфавитном порядке; скрытые (с точки)
-  и технические записи (deps, _build) пропускаются.
+  записи пропускаются — исключение только для каталога `.claude`
+  (`@visible_hidden_dirs`); технические записи (deps, _build) — всегда.
   """
   @spec list(String.t() | nil) :: {:ok, [entry()]} | {:error, term()}
   def list(rel) do
@@ -39,9 +43,9 @@ defmodule SipPhone.Web.FileBrowser do
         {:ok, names} ->
           entries =
             names
-            |> Enum.reject(&hidden?/1)
             |> Enum.map(&entry_info(path, &1))
             |> Enum.reject(&is_nil/1)
+            |> Enum.filter(&visible?/1)
             |> Enum.sort_by(&{&1.type != "dir", &1.name})
 
           {:ok, entries}
@@ -59,26 +63,26 @@ defmodule SipPhone.Web.FileBrowser do
   @spec read(String.t() | nil) :: {:ok, preview()} | {:error, :forbidden | :not_found}
   def read(rel) do
     with {:ok, path} <- resolve(rel) do
-      if File.regular?(path) do
-        size = File.stat!(path).size
-        {:ok, raw} = File.read(path)
-        chunk = binary_part(raw, 0, min(byte_size(raw), @preview_limit))
+      if File.regular?(path), do: preview(path, rel), else: {:error, :not_found}
+    end
+  end
 
-        if binary?(chunk) do
-          {:ok, %{path: rel, size: size, binary: true, truncated: false, content: nil}}
-        else
-          {:ok,
-           %{
-             path: rel,
-             size: size,
-             binary: false,
-             truncated: byte_size(raw) > @preview_limit,
-             content: chunk
-           }}
-        end
-      else
-        {:error, :not_found}
-      end
+  defp preview(path, rel) do
+    size = File.stat!(path).size
+    {:ok, raw} = File.read(path)
+    chunk = binary_part(raw, 0, min(byte_size(raw), @preview_limit))
+
+    if binary?(chunk) do
+      {:ok, %{path: rel, size: size, binary: true, truncated: false, content: nil}}
+    else
+      {:ok,
+       %{
+         path: rel,
+         size: size,
+         binary: false,
+         truncated: byte_size(raw) > @preview_limit,
+         content: chunk
+       }}
     end
   end
 
@@ -93,6 +97,10 @@ defmodule SipPhone.Web.FileBrowser do
       true -> {:ok, full}
     end
   end
+
+  # фильтрация по готовой записи: тип уже известен, исключение — только папки
+  defp visible?(%{type: "dir", name: name}), do: not hidden?(name) or name in @visible_hidden_dirs
+  defp visible?(%{name: name}), do: not hidden?(name)
 
   defp hidden?(name), do: String.starts_with?(name, ".")
 

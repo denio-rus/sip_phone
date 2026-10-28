@@ -18,6 +18,8 @@ defmodule SipPhone.SIP.Stack do
 
   import SipPhone.SIP.Message, only: [header: 2, header_param: 3, addr_uri: 2]
 
+  alias SipPhone.PubSub
+  alias SipPhone.SIP.LogBuffer
   alias SipPhone.SIP.Message
 
   @t1_ms 500
@@ -88,7 +90,7 @@ defmodule SipPhone.SIP.Stack do
   def state, do: GenServer.call(__MODULE__, :state)
 
   @doc "История SIP-сообщений (из `SipPhone.SIP.LogBuffer`), старые → новые."
-  @spec log() :: [SipPhone.SIP.LogBuffer.entry()]
+  @spec log() :: [LogBuffer.entry()]
   def log, do: GenServer.call(__MODULE__, :log)
 
   # ------------------------------------------------------------ Callbacks
@@ -142,7 +144,7 @@ defmodule SipPhone.SIP.Stack do
 
   @impl true
   def handle_call(:state, _f, state), do: {:reply, public_state(state), state}
-  def handle_call(:log, _f, state), do: {:reply, SipPhone.SIP.LogBuffer.all(), state}
+  def handle_call(:log, _f, state), do: {:reply, LogBuffer.all(), state}
 
   def handle_call({:register, server, number, password}, _f, state) do
     with {:ok, {host, port}} <- parse_server(server),
@@ -1097,9 +1099,10 @@ defmodule SipPhone.SIP.Stack do
         _ -> {nil, nil}
       end
 
-    cond do
-      host in [nil, ""] -> {:error, "не указан адрес SIP-сервера"}
-      true -> {:ok, {host, port}}
+    if host in [nil, ""] do
+      {:error, "не указан адрес SIP-сервера"}
+    else
+      {:ok, {host, port}}
     end
   rescue
     _ -> {:error, "некорректный адрес сервера"}
@@ -1242,8 +1245,8 @@ defmodule SipPhone.SIP.Stack do
 
   defp broadcast_log(entry) do
     entry = Map.merge(%{ts: System.system_time(:millisecond)}, entry)
-    SipPhone.SIP.LogBuffer.push(entry)
-    SipPhone.PubSub.broadcast({:sip_log, entry})
+    LogBuffer.push(entry)
+    PubSub.broadcast({:sip_log, entry})
   end
 
   defp public_state(state) do

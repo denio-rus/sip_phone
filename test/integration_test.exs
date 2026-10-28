@@ -293,11 +293,15 @@ defmodule IntegrationTest do
 
   test "8. проводник: дерево проекта, превью файла, traversal запрещён" do
     # корень дерева — каталог, содержащий приложение (документы + sip_phone/);
-    # deps/_build/скрытые не показываются нигде в дереве
+    # deps/_build и скрытые записи не показываются нигде в дереве, кроме
+    # каталога .claude (фича «Показ скрытых папок»)
     {:ok, entries} = Jason.decode(http_get("/api/fs"))
     names = Enum.map(entries, & &1["name"])
     assert "sip_phone" in names and "work_log.md" in names
-    refute ".claude" in names
+
+    if File.dir?(Path.join(Path.dirname(File.cwd!()), ".claude")) do
+      assert ".claude" in names
+    end
 
     {:ok, sub} = Jason.decode(http_get("/api/fs?path=sip_phone"))
     sub_names = Enum.map(sub, & &1["name"])

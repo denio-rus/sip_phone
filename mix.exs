@@ -11,6 +11,9 @@ defmodule SipPhone.MixProject do
       docs: [
         main: "SipPhone",
         extras: ["README.md": [title: "SIP-телефон"]]
+      ],
+      dialyzer: [
+        ignore_warnings: "dialyzer.ignore"
       ]
     ]
   end
@@ -27,7 +30,11 @@ defmodule SipPhone.MixProject do
       {:plug_cowboy, "~> 2.7"},
       {:websock_adapter, "~> 0.5"},
       {:jason, "~> 1.4"},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # статическая проверка типов (mix dialyzer) и стиля (mix credo),
+      # используются hook'ом .claude/hooks/elixir-verify.sh
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: :dev, runtime: false}
     ]
   end
 end
