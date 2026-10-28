@@ -14,9 +14,9 @@ defmodule FileTreeFixture do
         app/mix.exs          <- «каталог приложения», имитирует sip_phone/
         README.md            <- видимый файл
         src/handler.ex       <- видимая папка
-        .claude/             <- скрытая папка (объект фичи «Показ скрытых папок»)
-        .secrets/            <- ещё одна скрытая папка
-        .hidden_file         <- скрытый файл
+        .claude/             <- единственная видимая dot-папка (фича «Показ скрытых папок»)
+        .secrets/            <- скрытая папка, должна оставаться невидимой
+        .hidden_file         <- скрытый файл, невидим (исключение — только для папок)
         deps/, _build/       <- технические каталоги, скрыты намеренно
   """
 
@@ -66,7 +66,8 @@ defmodule SipPhone.Web.FileBrowserTreeTest do
   Тесты отображения файлового дерева (`SipPhone.Web.FileBrowser` + эндпоинт
   «Проводника»): каркас проверяет текущие контракты вывода (видимые записи,
   порядок, фильтрация `deps`/`_build`), секция фичи — «Показ скрытых папок в
-  дереве файлов» (папка `.claude` и другие dot-каталоги должны быть видны).
+  дереве файлов»: из dot-записей виден только каталог `.claude`, прочие
+  скрытые папки и файлы скрыты.
   """
   use ExUnit.Case, async: false
 
@@ -96,9 +97,11 @@ defmodule SipPhone.Web.FileBrowserTreeTest do
       FileTreeFixture.with_tree(fn _root ->
         {:ok, entries} = FileBrowser.list(".")
 
-        # app/ — тоже видимая папка, как sip_phone/ в реальном дереве
-        assert Enum.map(entries, & &1.name) == ["app", "src", "README.md"]
-        assert Enum.map(entries, & &1.type) == ["dir", "dir", "file"]
+        # app/ — тоже видимая папка, как sip_phone/ в реальном дереве;
+        # .claude — единственная пропущенная dot-запись (фича), сортируется
+        # первой среди каталогов
+        assert Enum.map(entries, & &1.name) == [".claude", "app", "src", "README.md"]
+        assert Enum.map(entries, & &1.type) == ["dir", "dir", "dir", "file"]
       end)
     end
 
@@ -120,7 +123,8 @@ defmodule SipPhone.Web.FileBrowserTreeTest do
   end
 
   describe "фича «Показ скрытых папок в дереве файлов»" do
-    # Красные до реализации фичи: FileBrowser.hidden?/1 отсекает все dot-записи.
+    # Из dot-записей в дереве виден только каталог .claude; прочие скрытые
+    # папки и файлы отсекаются как раньше.
 
     test "папка .claude видна в корне дерева" do
       FileTreeFixture.with_tree(fn _root ->
@@ -131,11 +135,19 @@ defmodule SipPhone.Web.FileBrowserTreeTest do
       end)
     end
 
-    test "прочие скрытые папки видны в корне дерева" do
+    test "прочие скрытые папки не видны в корне дерева" do
       FileTreeFixture.with_tree(fn _root ->
         names = FileBrowser.list(".") |> FileTreeFixture.names()
 
-        assert ".secrets" in names
+        refute ".secrets" in names
+      end)
+    end
+
+    test "исключение распространяется только на папки — скрытые файлы не видны" do
+      FileTreeFixture.with_tree(fn _root ->
+        names = FileBrowser.list(".") |> FileTreeFixture.names()
+
+        refute ".hidden_file" in names
       end)
     end
 
