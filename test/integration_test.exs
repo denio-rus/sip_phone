@@ -13,18 +13,21 @@ defmodule FakeSIPServer do
     end)
   end
 
-  def loop(sock) do
+  def loop(sock, tap \\ nil) do
     receive do
       {:udp, ^sock, ip, from_port, data} ->
-        handle_packet(sock, ip, from_port, data)
-        loop(sock)
+        tap = handle_packet(sock, ip, from_port, data, tap)
+        loop(sock, tap)
+
+      {:tap, pid} ->
+        loop(sock, pid)
 
       :stop ->
         :gen_udp.close(sock)
     end
   end
 
-  defp handle_packet(sock, ip, from_port, data) do
+  defp handle_packet(sock, ip, from_port, data, tap) do
     [head | _] = String.split(data, "\r\n")
 
     cond do
@@ -45,6 +48,10 @@ defmodule FakeSIPServer do
         send_resp(sock, ip, from_port, data, 180, "Ringing", [])
         Process.sleep(50)
 
+        # Contact собеседника — адрес самого сервера (не порт телефона, как было
+        # в ранней фикстуре): тогда in-dialog (ACK/BYE) реально долетают до сервера
+        {:ok, my_port} = :inet.port(sock)
+
         send_resp(
           sock,
           ip,
@@ -52,11 +59,14 @@ defmodule FakeSIPServer do
           data,
           200,
           "OK",
-          [{"contact", "<sip:101@127.0.0.1:#{from_port}>"}, {"content-type", "application/sdp"}],
+          [{"contact", "<sip:101@127.0.0.1:#{my_port}>"}, {"content-type", "application/sdp"}],
           "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
         )
 
       String.starts_with?(head, "BYE") ->
+        # копия BYE тестовому процессу (по запросу {:tap, pid}) — проверить
+        # магический cookie в Via-branch (RFC 3261 §8.1.1.7, work_log §22)
+        if tap, do: send(tap, {:bye_seen, data})
         send_resp(sock, ip, from_port, data, 200, "OK", [])
 
       String.starts_with?(head, "CANCEL") ->
@@ -65,6 +75,8 @@ defmodule FakeSIPServer do
       true ->
         :ok
     end
+
+    tap
   end
 
   defp send_resp(sock, ip, port, req, code, reason, extra_headers, body \\ "") do
@@ -183,9 +195,15 @@ defmodule IntegrationTest do
   end
 
   test "3. завершение разговора: BYE -> idle" do
+    # просим fake-сервер копировать BYE нам: branch клиентского запроса обязан
+    # начинаться с z9hG4bK (RFC 3261 §8.1.1.7)
+    send(:fake_sip_srv, {:tap, self()})
     :ok = Stack.call_number("101")
     wait_state(:call, "active")
     :ok = Stack.hangup()
+    assert_receive {:bye_seen, bye}, 3000
+    assert bye =~ ~r/^Via: .*branch=z9hG4bK/m, "Via-branch BYE без магического cookie: #{bye}"
+    send(:fake_sip_srv, {:tap, nil})
     wait_state(:call, "idle")
   end
 

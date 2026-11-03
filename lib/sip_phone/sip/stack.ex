@@ -663,7 +663,9 @@ defmodule SipPhone.SIP.Stack do
         method: "BYE",
         uri: dialog_uri(call, state)
       }
-      |> put_via("bye-" <> rand_hex(6))
+      # branch обязан начинаться с z9hG4bK (RFC 3261 §8.1.1.7) — новый, не
+      # прошлый «bye-<hex>»: строгие серверы такой BYE отвергают (work_log §22)
+      |> put_via(new_branch())
       |> Message.put_header("max-forwards", "70")
       |> Message.put_header(
         "from",
