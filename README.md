@@ -30,6 +30,28 @@ mix run --no-halt
 (`MIX_ENV=test`) они свои (`config/test.exs`: UDP **5180**, TCP **8312**) —
 чтобы `mix test` мог работать параллельно с запущенным `./run.sh`.
 
+## Запуск в режиме демона
+
+Встроенного daemon-режима нет — демон это обычный `mix run --no-halt`,
+отсоединённый от терминала (`mix run` исполняется в своей BEAM-VM, поэтому
+записанный pid — это и есть процесс телефона):
+
+```bash
+mkdir -p tmp
+nohup mix run --no-halt > tmp/sip_phone.log 2>&1 &
+echo $! > tmp/sip_phone.pid
+```
+
+Запустился — проверить `curl -s localhost:8212/api/state` (JSON-состояние
+телефона); живой лог — `tail -f tmp/sip_phone.log`. Остановка:
+
+```bash
+kill "$(cat tmp/sip_phone.pid)"   # SIGTERM, в логе «SIGTERM received - shutting down»
+```
+
+Порты и переменные окружения — те же, что при обычном запуске; `tmp/`
+(лог и pid-файл) в `.gitignore`.
+
 ## Как пользоваться
 
 1. Ввести **адрес SIP-сервера** (`host[:port]`, порт по умолчанию 5060),
