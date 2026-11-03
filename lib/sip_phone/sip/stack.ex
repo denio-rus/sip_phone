@@ -433,12 +433,51 @@ defmodule SipPhone.SIP.Stack do
            %{state | reg_status: :registered, reg_error: nil, reg_recheck: timer, auth: nil}}
         end
 
+      code == 423 ->
+        interval_too_brief(msg, state)
+
       code >= 300 ->
         registration_failed("#{code} #{msg.reason}", state)
 
       true ->
         # 1xx — промежуточный, ждём финальный
         {:noreply, state}
+    end
+  end
+
+  # 423 Interval Too Brief — не отказ: повтор REGISTER с интервалом из
+  # Min-Expires (§24.15; на ECSS наблюдался живьём, work_log §6). При снятии
+  # с регистрации (Expires: 0) ответ игнорируется — минимальный интервал к
+  # нулевому неприменим (§24.15)
+  defp interval_too_brief(msg, state) do
+    if state.reg_expires == 0 do
+      info_log("423 на снятие с регистрации — игнорирую (§24.15), номер снят")
+
+      {:noreply,
+       %{
+         state
+         | reg_status: :unregistered,
+           reg_error: nil,
+           auth: nil,
+           reg_dialog: nil,
+           reg_expires: @expires
+       }}
+    else
+      case min_expires(msg) do
+        nil ->
+          registration_failed("423 #{msg.reason} без Min-Expires", state)
+
+        min ->
+          info_log("сервер просит Min-Expires: #{min}, повторяю REGISTER с ним")
+          {:noreply, send_register(%{state | reg_expires: max(min, state.reg_expires)})}
+      end
+    end
+  end
+
+  defp min_expires(msg) do
+    with v when is_binary(v) <- Message.header(msg, "min-expires"),
+         {n, _} <- Integer.parse(v) do
+      n
     end
   end
 

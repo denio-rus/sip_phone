@@ -87,6 +87,11 @@ defmodule FakeSIPServer do
     tap
   end
 
+  @doc "Публичная обёртка для сторонних fake-серверов тестов (тест 12)."
+  def reply(sock, ip, port, req, code, reason, extra_headers, body \\ "") do
+    send_resp(sock, ip, port, req, code, reason, extra_headers, body)
+  end
+
   defp send_resp(sock, ip, port, req, code, reason, extra_headers, body \\ "") do
     headers =
       for name <- ["Via", "From", "To", "Call-ID", "CSeq"] do
@@ -101,6 +106,62 @@ defmodule FakeSIPServer do
     case Regex.run(~r/^#{name}: (.*)\r$/im, req) do
       [_, v] -> String.trim(v)
       _ -> ""
+    end
+  end
+end
+
+defmodule MinIntervalSIPServer do
+  @moduledoc """
+  Fake-сервер теста 12: на REGISTER отвечает 423 Interval Too Brief с
+  Min-Expires: 600, повтор (Expires >= 600) принимает — 200. Каждый REGISTER
+  копируется тестовому процессу.
+  """
+
+  # больше штатного @expires стека (300) — иначе 423 никогда не случится
+  @min_expires 600
+
+  def start(port, test_pid) do
+    # сокет открывается внутри цикла — иначе {:udp,...} приходят в mailbox
+    # запустившего, а не сервера (§5)
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        {:ok, sock} = :gen_udp.open(port, [:binary, active: true])
+        send(parent, {:min_srv_ready, self()})
+        loop(sock, test_pid)
+      end)
+
+    receive do
+      {:min_srv_ready, ^pid} -> pid
+    after
+      1000 -> raise "MinIntervalSIPServer не поднялся на порту #{port}"
+    end
+  end
+
+  defp loop(sock, test_pid) do
+    receive do
+      {:udp, ^sock, ip, port, "REGISTER" <> _ = data} ->
+        send(test_pid, {:register_req, data})
+        requested = Regex.run(~r/Expires: (\d+)/, data) |> List.last() |> String.to_integer()
+
+        if requested >= @min_expires do
+          FakeSIPServer.reply(sock, ip, port, data, 200, "OK", [
+            {"contact", "<sip:105@#{:inet.ntoa(ip)}:#{port}>;expires=#{@min_expires}"}
+          ])
+        else
+          FakeSIPServer.reply(sock, ip, port, data, 423, "Interval Too Brief", [
+            {"min-expires", to_string(@min_expires)}
+          ])
+        end
+
+        loop(sock, test_pid)
+
+      {:udp, ^sock, _ip, _port, _other} ->
+        loop(sock, test_pid)
+
+      :stop ->
+        :gen_udp.close(sock)
     end
   end
 end
@@ -423,6 +484,27 @@ defmodule IntegrationTest do
     send(:fake_sip_srv, {:tap, nil})
     wait_state(:call, "idle")
     :gen_udp.close(sock)
+  end
+
+  test "12. 423 Interval Too Brief → повтор REGISTER с Min-Expires" do
+    # 423 — не отказ: REGISTER обязан быть повторён с Expires >= Min-Expires
+    # (§21.2, таблица §22.3); сервер теста ждёт Min-Expires: 600
+    srv = MinIntervalSIPServer.start(5094, self())
+
+    try do
+      :ok = Stack.register("127.0.0.1:5094", "105", "secret")
+      assert_receive {:register_req, first}, 3000
+      assert first =~ "Expires: 300", "первый REGISTER не со штатным expires: #{first}"
+      assert_receive {:register_req, retry}, 3000
+      assert retry =~ "Expires: 600", "повтор не с Min-Expires: #{retry}"
+      wait_state(:registration, "registered", 8000)
+    after
+      send(srv, :stop)
+
+      # состояние после теста — обратно на fake-сервер тестов
+      Stack.register("127.0.0.1:#{@server_port}", "100", "secret")
+      wait_state(:registration, "registered", 6000)
+    end
   end
 
   defp http_get(path) do
