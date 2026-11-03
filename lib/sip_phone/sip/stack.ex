@@ -536,6 +536,8 @@ defmodule SipPhone.SIP.Stack do
       branch: new_branch(),
       target: server_target(state),
       dialog_target: server_target(state),
+      # route set из Record-Route 200 OK (§12.1.2) — in-dialog идут через него
+      route_set: [],
       canceled: false,
       auth_tries: 0
     }
@@ -587,25 +589,7 @@ defmodule SipPhone.SIP.Stack do
         {:noreply, state}
 
       code < 300 ->
-        remote_tag = header_param(msg, "to", "tag")
-        state = finish_tx(call.branch, state)
-
-        if call.canceled do
-          # гонка CANCEL/200: ACK + немедленный BYE
-          state = send_ack(msg, call, from, state)
-          {:noreply, hangup_active(%{state | call: %{call | remote_tag: remote_tag}})}
-        else
-          target = dialog_target(msg, from, state)
-          state = send_ack(msg, call, target, state)
-          info_log("установлено соединение с #{call.remote}")
-
-          {:noreply,
-           %{
-             state
-             | call: %{call | remote_tag: remote_tag, dialog_target: target},
-               call_status: :active
-           }}
-        end
+        invite_established(msg, from, call, state)
 
       code in [401, 407] and not call.canceled and call.auth_tries < 2 ->
         # сервер требует аутентификацию вызова: ACK + повтор INVITE в том же
@@ -659,6 +643,36 @@ defmodule SipPhone.SIP.Stack do
 
   defp handle_invite_response(_msg, _from, state), do: {:noreply, state}
 
+  # 2xx на исходящий INVITE: ACK, переход в active; при гонке с CANCEL —
+  # ACK + немедленный BYE (§3.4.5)
+  defp invite_established(msg, from, call, state) do
+    remote_tag = header_param(msg, "to", "tag")
+    state = finish_tx(call.branch, state)
+
+    if call.canceled do
+      state = send_ack(msg, call, from, state)
+      {:noreply, hangup_active(%{state | call: %{call | remote_tag: remote_tag}})}
+    else
+      # route set строится из Record-Route 2xx в обратном порядке (§12.1.2):
+      # первый элемент — ближайший к нам прокси, в него идут ACK/BYE
+      route_set = msg |> Message.headers("record-route") |> Enum.reverse()
+      target = dialog_send_target(route_set, msg, from, state)
+
+      call = %{call | remote_tag: remote_tag, dialog_target: target, route_set: route_set}
+      state = send_ack(msg, call, target, state)
+      info_log("установлено соединение с #{call.remote}")
+
+      {:noreply, %{state | call: call, call_status: :active}}
+    end
+  end
+
+  # цель in-dialog: адрес первой записи route set, иначе Contact собеседника
+  defp dialog_send_target([first | _], msg, from, state) do
+    route_target(first) || dialog_target(msg, from, state)
+  end
+
+  defp dialog_send_target([], msg, from, state), do: dialog_target(msg, from, state)
+
   defp cancel_outgoing(%{call: %{direction: :out} = call} = state) do
     info_log("отменяю исходящий вызов (CANCEL)")
     cseq_n = call.cseq
@@ -706,6 +720,7 @@ defmodule SipPhone.SIP.Stack do
       |> Message.put_header("cseq", "#{cseq} BYE")
       |> Message.put_header("user-agent", user_agent())
       |> Message.put_header("content-length", "0")
+      |> with_routes(Map.get(call, :route_set, []))
 
     info_log("завершаю разговор (BYE)")
 
@@ -758,6 +773,11 @@ defmodule SipPhone.SIP.Stack do
         remote = msg |> addr_uri("from") |> then(&(&1 || "unknown")) |> Message.user_of()
         tag = new_tag()
 
+        # route set входящего: Record-Route из INVITE в обратном порядке —
+        # наш BYE по этому диалогу пойдёт через него, а не прямо в Contact
+        route_set = msg |> Message.headers("record-route") |> Enum.reverse()
+        dialog_target = dialog_send_target(route_set, msg, from, state)
+
         call = %{
           direction: :in,
           remote: remote,
@@ -767,7 +787,8 @@ defmodule SipPhone.SIP.Stack do
           cseq: elem(Message.cseq(msg) || {0, "INVITE"}, 0),
           invite: msg,
           invite_from: from,
-          dialog_target: dialog_target(msg, from, state),
+          dialog_target: dialog_target,
+          route_set: route_set,
           remote_contact: contact_of(msg, from)
         }
 
@@ -997,6 +1018,7 @@ defmodule SipPhone.SIP.Stack do
       |> Message.put_header("cseq", "#{cseq} ACK")
       |> Message.put_header("user-agent", user_agent())
       |> Message.put_header("content-length", "0")
+      |> with_routes(Map.get(call, :route_set, []))
 
     send_request_stateless(ack, target, state)
     state
@@ -1251,6 +1273,27 @@ defmodule SipPhone.SIP.Stack do
 
       _ ->
         :error
+    end
+  end
+
+  # Route-заголовки по route set: повторяемые, порядок значим (§7.3);
+  # пустой route set — сообщение без изменений (прямой диалог без прокси)
+  defp with_routes(msg, []), do: msg
+
+  defp with_routes(msg, routes) do
+    Enum.reduce(routes, msg, &Message.append_header(&2, "route", &1))
+  end
+
+  # адрес первой записи route set (loose routing, параметры вроде ;lr отбрасывает
+  # sip_uri_hostport); nil — не распарсился/не разрешился, caller берёт Contact
+  defp route_target(hdr) do
+    uri = hdr |> String.trim() |> String.trim_leading("<") |> String.trim_trailing(">")
+
+    with {:ok, {host, port}} <- sip_uri_hostport(uri),
+         {:ok, ip} <- resolve_host(host) do
+      {ip, port}
+    else
+      _ -> nil
     end
   end
 

@@ -59,7 +59,11 @@ defmodule FakeSIPServer do
           data,
           200,
           "OK",
-          [{"contact", "<sip:101@127.0.0.1:#{my_port}>"}, {"content-type", "application/sdp"}],
+          [
+            {"contact", "<sip:101@127.0.0.1:#{my_port}>"},
+            {"record-route", "<sip:127.0.0.1:#{my_port}>;lr"},
+            {"content-type", "application/sdp"}
+          ],
           "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
         )
 
@@ -71,6 +75,10 @@ defmodule FakeSIPServer do
 
       String.starts_with?(head, "CANCEL") ->
         send_resp(sock, ip, from_port, data, 200, "OK", [])
+
+      String.starts_with?(head, "ACK") ->
+        if tap, do: send(tap, {:ack_seen, data})
+        :ok
 
       true ->
         :ok
@@ -200,9 +208,15 @@ defmodule IntegrationTest do
     send(:fake_sip_srv, {:tap, self()})
     :ok = Stack.call_number("101")
     wait_state(:call, "active")
+
+    # ACK на 200 OK с Record-Route обязан идти в Route (RFC 3261 §12.1.2, §17.1.1.3)
+    assert_receive {:ack_seen, ack}, 3000
+    assert ack =~ "Route:", "ACK без Route по route set: #{ack}"
+
     :ok = Stack.hangup()
     assert_receive {:bye_seen, bye}, 3000
     assert bye =~ ~r/^Via: .*branch=z9hG4bK/m, "Via-branch BYE без магического cookie: #{bye}"
+    assert bye =~ "Route:", "BYE без Route по route set: #{bye}"
     send(:fake_sip_srv, {:tap, nil})
     wait_state(:call, "idle")
   end
@@ -374,6 +388,41 @@ defmodule IntegrationTest do
       Stack.register("127.0.0.1:#{@server_port}", "100", "secret")
       wait_state(:registration, "registered", 6000)
     end
+  end
+
+  test "11. Record-Route входящего: callee шлёт BYE в Route, а не прямо в Contact" do
+    # INVITE приходит через «прокси» (Record-Route указывает на fake-сервер),
+    # Contact звонящего — наш сырой сокет. После ответа инициативу отбоя
+    # берёт телефон: BYE обязан уйти адресу из route set (§12.1.2)
+    {:ok, sock} = :gen_udp.open(5093, [:binary, active: true])
+
+    invite =
+      "INVITE sip:100@127.0.0.1:#{phone_port()} SIP/2.0\r\n" <>
+        "Via: SIP/2.0/UDP 127.0.0.1:5093;branch=z9hG4bKrr1\r\n" <>
+        "From: <sip:104@127.0.0.1>;tag=fakefrom4\r\n" <>
+        "To: <sip:100@127.0.0.1>\r\n" <>
+        "Call-ID: fake-incoming-4@127.0.0.1\r\n" <>
+        "CSeq: 1 INVITE\r\n" <>
+        "Record-Route: <sip:127.0.0.1:#{@server_port}>;lr\r\n" <>
+        "Contact: <sip:104@127.0.0.1:5093>\r\n" <>
+        "Content-Type: application/sdp\r\n" <>
+        "Content-Length: 0\r\n\r\n"
+
+    send(:fake_sip_srv, {:tap, self()})
+    :gen_udp.send(sock, @phone_ip, phone_port(), invite)
+    assert_receive {:udp, ^sock, _, _, "SIP/2.0 100" <> _}, 3000
+    wait_state(:call, "incoming")
+    :ok = Stack.answer()
+    recv_final(sock)
+    wait_state(:call, "active")
+    :ok = Stack.hangup()
+
+    assert_receive {:bye_seen, bye}, 3000
+    assert bye =~ "fake-incoming-4", "BYE не по тому диалогу: #{bye}"
+    assert bye =~ "Route:", "BYE без Route по route set входящего: #{bye}"
+    send(:fake_sip_srv, {:tap, nil})
+    wait_state(:call, "idle")
+    :gen_udp.close(sock)
   end
 
   defp http_get(path) do

@@ -280,6 +280,24 @@ defmodule SipPhone.SIP.Message do
   end
 
   @doc """
+  Добавить заголовок, не отменяя уже существующие — для повторяемых
+  (Route, Record-Route: RFC 3261 §7.3, порядок заголовков значим).
+
+  ## Examples
+
+      iex> %Message{type: :request, method: "BYE", uri: "sip:x"}
+      ...> |> Message.append_header("route", "<sip:p1;lr>")
+      ...> |> Message.append_header("Route", "<sip:p2;lr>")
+      ...> |> Map.get(:headers)
+      [{"route", "<sip:p1;lr>"}, {"route", "<sip:p2;lr>"}]
+
+  """
+  @spec append_header(t(), String.t(), String.t()) :: t()
+  def append_header(%__MODULE__{headers: hs} = msg, name, value) do
+    %{msg | headers: hs ++ [{String.downcase(name), value}]}
+  end
+
+  @doc """
   Собрать сообщение в iodata: стартовая строка, заголовки в каноническом
   регистре (`call-id` → `Call-ID`), тело как есть. `Content-Length` —
   ответственность вызывающего (см. `put_header/3`).
