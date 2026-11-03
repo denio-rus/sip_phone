@@ -1,9 +1,11 @@
 defmodule SipPhone.SIP.Stack do
   @moduledoc """
   SIP User-Agent: регистрация (REGISTER + digest auth), исходящие и входящие
-  вызовы (INVITE/ACK/CANCEL/BYE). Транспорт — UDP. Транзакции упрощённые:
-  ретрансляция запросов до финального ответа, ретрансляция финальных ответов
-  на INVITE до ACK.
+  вызовы (INVITE/ACK/CANCEL/BYE). Транспорт — UDP. Клиентские транзакции —
+  с таймерами RFC 3261 §17: ретранслят запросов с шагом T1·2^n (для non-INVITE
+  с потолком T2), жизнь транзакции 64·T1 (Timer B/F); финальный ответ на
+  INVITE ретранслируется до ACK (Timer G, T1·2^n, до 64·T1). Серверная сторона
+  упрощена (без Timer H/J) — см. «Известные упрощения» work_log.
 
   Локальный UDP-порт — из `:sip_phone, :sip_port` (`SIP_PHONE_SIP_PORT`,
   боевая норма 5080; в test-окружении своё — см. `config/test.exs`).
@@ -22,6 +24,8 @@ defmodule SipPhone.SIP.Stack do
   alias SipPhone.SIP.LogBuffer
   alias SipPhone.SIP.Message
 
+  # Только для ретранслята 180 Ringing (work_log §10: каждые 2 с, остановка
+  # через ~30 с); транзакционные таймеры — state.t1/t2/tx_timeout (§17)
   @t1_ms 500
   @max_retries 15
   @expires 300
@@ -102,9 +106,16 @@ defmodule SipPhone.SIP.Stack do
     {:ok, local_port} = :inet.port(socket)
     store_local_endpoint("127.0.0.1", local_port)
 
+    # Таймеры §17: T1 — из env (боевая норма 500 мс, в тесте укорочен —
+    # config/test.exs), T2 = 8·T1, Timer B/F = 64·T1
+    t1 = Application.get_env(:sip_phone, :t1_ms, 500)
+
     state = %{
       socket: socket,
       local_port: local_port,
+      t1: t1,
+      t2: t1 * 8,
+      tx_timeout: t1 * 64,
       local_ip: ~c"127.0.0.1",
       # {host_string, port}
       server: nil,
@@ -224,7 +235,8 @@ defmodule SipPhone.SIP.Stack do
     end
   end
 
-  # Ретрансляция клиентского запроса
+  # Ретрансляция клиентского запроса (Timer A/E): шаг T1·2^n, для non-INVITE
+  # с потолком T2 (§17.1.1.2/§17.1.2.2); по истечении 64·T1 (Timer B/F) — timeout
   def handle_info({:tx_retry, branch}, state) do
     case Map.get(state.client_tx, branch) do
       nil ->
@@ -233,13 +245,20 @@ defmodule SipPhone.SIP.Stack do
       tx ->
         :gen_udp.send(state.socket, elem(tx.target, 0), elem(tx.target, 1), tx.iodata)
 
-        if tx.retries + 1 >= @max_retries do
+        if System.monotonic_time(:millisecond) >= tx.deadline do
           info_log("нет ответа на #{tx.method}, операция прервана по таймауту")
           state = %{state | client_tx: Map.delete(state.client_tx, branch)}
           {:noreply, fail_operation(tx.kind, state)}
         else
-          timer = Process.send_after(self(), {:tx_retry, branch}, @t1_ms * 2 * tx.retries_factor)
-          next_factor = min(tx.retries_factor * 2, 16)
+          interval =
+            if tx.kind == :invite do
+              # у INVITE ретрансляты удваиваются без потолка (§17.1.1.2)
+              tx.retries_factor * state.t1
+            else
+              min(tx.retries_factor * state.t1, state.t2)
+            end
+
+          timer = Process.send_after(self(), {:tx_retry, branch}, interval)
 
           {:noreply,
            %{
@@ -248,7 +267,7 @@ defmodule SipPhone.SIP.Stack do
                  Map.put(state.client_tx, branch, %{
                    tx
                    | retries: tx.retries + 1,
-                     retries_factor: next_factor,
+                     retries_factor: tx.retries_factor * 2,
                      timer: timer
                  })
            }}
@@ -257,10 +276,18 @@ defmodule SipPhone.SIP.Stack do
   end
 
   # Ретрансляция нашего финального ответа на INVITE до получения ACK
+  # (Timer G): T1·2^n без потолка, отмена после 64·T1 (§17.2.1)
   def handle_info({:final_retry, call_id}, %{pending_final: %{call_id: call_id} = pf} = state) do
-    :gen_udp.send(state.socket, elem(pf.target, 0), elem(pf.target, 1), pf.iodata)
-    timer = Process.send_after(self(), {:final_retry, call_id}, @t1_ms * 2)
-    {:noreply, %{state | pending_final: %{pf | timer: timer}}}
+    if System.monotonic_time(:millisecond) >= pf.deadline do
+      info_log("ACK на финальный ответ не получен — ретрансляцию прекращена")
+      {:noreply, %{state | pending_final: nil}}
+    else
+      :gen_udp.send(state.socket, elem(pf.target, 0), elem(pf.target, 1), pf.iodata)
+      timer = Process.send_after(self(), {:final_retry, call_id}, pf.retries_factor * state.t1)
+
+      {:noreply,
+       %{state | pending_final: %{pf | timer: timer, retries_factor: pf.retries_factor * 2}}}
+    end
   end
 
   def handle_info({:final_retry, _}, state), do: {:noreply, state}
@@ -872,10 +899,11 @@ defmodule SipPhone.SIP.Stack do
   # ------------------------------------------------------------- Отправка
 
   # клиентская транзакция: отправить + ретранслировать до финального ответа
+  # (первый ретранслят через T1 — Timer A/E, §17.1)
   defp put_client_tx(state, key, kind, %Message{} = msg, target) do
     iodata = Message.to_iodata(msg)
     send_raw(iodata, target, state, "#{msg |> Message.summary()} → #{peer_str(target)}")
-    timer = Process.send_after(self(), {:tx_retry, key}, @t1_ms * 2)
+    timer = Process.send_after(self(), {:tx_retry, key}, state.t1)
 
     tx = %{
       kind: kind,
@@ -884,7 +912,8 @@ defmodule SipPhone.SIP.Stack do
       target: target,
       timer: timer,
       retries: 0,
-      retries_factor: 1
+      retries_factor: 2,
+      deadline: System.monotonic_time(:millisecond) + state.tx_timeout
     }
 
     %{state | client_tx: Map.put(state.client_tx, key, tx)}
@@ -895,13 +924,22 @@ defmodule SipPhone.SIP.Stack do
     send_raw(iodata, target, state, "#{Message.summary(msg)} → #{peer_str(target)}")
   end
 
-  # финальный ответ на INVITE: ретранслируем до ACK
+  # финальный ответ на INVITE: ретранслируем до ACK (Timer G от T1)
   defp send_final_to_invite(%Message{} = msg, target, state, summary) do
     iodata = Message.to_iodata(msg)
     send_raw(iodata, target, state, "#{summary} → #{peer_str(target)}")
     call_id = call_id_of(msg)
-    timer = Process.send_after(self(), {:final_retry, call_id}, @t1_ms * 2)
-    pf = %{iodata: iodata, target: target, timer: timer, call_id: call_id}
+    timer = Process.send_after(self(), {:final_retry, call_id}, state.t1)
+
+    pf = %{
+      iodata: iodata,
+      target: target,
+      timer: timer,
+      call_id: call_id,
+      retries_factor: 2,
+      deadline: System.monotonic_time(:millisecond) + state.tx_timeout
+    }
+
     put_pending_final(state, pf)
   end
 

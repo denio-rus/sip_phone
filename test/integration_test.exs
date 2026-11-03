@@ -355,6 +355,27 @@ defmodule IntegrationTest do
     end
   end
 
+  test "10. транзакционный таймер §17: молчаливый сервер → отказ в пределах 64·T1" do
+    # UDP-сокет открыт, но молчит: REGISTER ретранслируется по лестнице T1·2^n
+    # и прерывается по Timer F = 64·T1 (в тесте T1=20 мс — config/test.exs)
+    {:ok, dead} = :gen_udp.open(5099, [:binary, active: false])
+    t1 = Application.fetch_env!(:sip_phone, :t1_ms)
+
+    try do
+      :ok = Stack.register("127.0.0.1:5099", "100", "secret")
+      # 64·T1 = 1280 мс + запас на последний шаг лестницы
+      wait_state(:registration, "failed", t1 * 64 + 2000)
+      assert Stack.state().reg_error =~ "не отвечает"
+    after
+      :gen_udp.close(dead)
+
+      # возвращаем телефон на fake-сервер — следующий setup перерегистрирует
+      # сам, но оставляем предсказуемое состояние для остальных тестов
+      Stack.register("127.0.0.1:#{@server_port}", "100", "secret")
+      wait_state(:registration, "registered", 6000)
+    end
+  end
+
   defp http_get(path) do
     {200, body} = http_raw(path)
     body
