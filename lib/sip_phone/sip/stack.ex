@@ -695,7 +695,7 @@ defmodule SipPhone.SIP.Stack do
       # route set строится из Record-Route 2xx в обратном порядке (§12.1.2):
       # первый элемент — ближайший к нам прокси, в него идут ACK/BYE
       route_set = msg |> Message.headers("record-route") |> Enum.reverse()
-      target = dialog_send_target(route_set, msg, from, state)
+      target = dialog_send_target(route_set, msg, from)
 
       call = %{call | remote_tag: remote_tag, dialog_target: target, route_set: route_set}
       state = send_ack(msg, call, target, state)
@@ -706,11 +706,11 @@ defmodule SipPhone.SIP.Stack do
   end
 
   # цель in-dialog: адрес первой записи route set, иначе Contact собеседника
-  defp dialog_send_target([first | _], msg, from, state) do
-    route_target(first) || dialog_target(msg, from, state)
+  defp dialog_send_target([first | _], msg, from) do
+    route_target(first) || dialog_target(msg, from)
   end
 
-  defp dialog_send_target([], msg, from, state), do: dialog_target(msg, from, state)
+  defp dialog_send_target([], msg, from), do: dialog_target(msg, from)
 
   defp cancel_outgoing(%{call: %{direction: :out} = call} = state) do
     info_log("отменяю исходящий вызов (CANCEL)")
@@ -788,7 +788,7 @@ defmodule SipPhone.SIP.Stack do
             send_raw(iodata, from, state, "180 Ringing (ретрансляция INVITE) → #{peer_str(from)}")
 
           nil ->
-            trying = build_response(msg, 100, "Trying", state) |> without_contact()
+            trying = build_response(msg, 100, "Trying", state)
 
             send_raw(
               Message.to_iodata(trying),
@@ -815,7 +815,7 @@ defmodule SipPhone.SIP.Stack do
         # route set входящего: Record-Route из INVITE в обратном порядке —
         # наш BYE по этому диалогу пойдёт через него, а не прямо в Contact
         route_set = msg |> Message.headers("record-route") |> Enum.reverse()
-        dialog_target = dialog_send_target(route_set, msg, from, state)
+        dialog_target = dialog_send_target(route_set, msg, from)
 
         call = %{
           direction: :in,
@@ -828,15 +828,15 @@ defmodule SipPhone.SIP.Stack do
           invite_from: from,
           dialog_target: dialog_target,
           route_set: route_set,
-          remote_contact: contact_of(msg, from)
+          remote_contact: contact_of(msg)
         }
 
         # 100 Trying
-        trying = build_response(msg, 100, "Trying", state) |> without_contact()
+        trying = build_response(msg, 100, "Trying", state)
         send_raw(Message.to_iodata(trying), from, state, "100 Trying → #{peer_str(from)}")
 
         # 180 Ringing — звонящий должен слышать гудок; ретранслируем до финального ответа
-        ringing = build_response(msg, 180, "Ringing", state) |> without_contact()
+        ringing = build_response(msg, 180, "Ringing", state)
         state = start_ringing(ringing, from, state, call.call_id)
 
         info_log("входящий вызов от #{remote}")
@@ -865,7 +865,7 @@ defmodule SipPhone.SIP.Stack do
   defp handle_request(%Message{method: "BYE"} = msg, from, %{call: call} = state)
        when call != nil and state.call_status in [:active, :incoming] do
     info_log("собеседник завершил вызов (BYE)")
-    ok = build_response(msg, 200, "OK", state) |> without_contact()
+    ok = build_response(msg, 200, "OK", state)
     send_raw(Message.to_iodata(ok), from, state, "200 OK на BYE → #{peer_str(from)}")
     state = clear_prov(state)
     {:noreply, %{state | call: nil, call_status: :idle, call_error: nil}}
@@ -903,7 +903,7 @@ defmodule SipPhone.SIP.Stack do
   end
 
   defp handle_request(%Message{method: "CANCEL"} = msg, from, state) do
-    ok = build_response(msg, 200, "OK", state) |> without_contact()
+    ok = build_response(msg, 200, "OK", state)
     send_raw(Message.to_iodata(ok), from, state, "200 OK на CANCEL → #{peer_str(from)}")
     {:noreply, state}
   end
@@ -911,7 +911,6 @@ defmodule SipPhone.SIP.Stack do
   defp handle_request(%Message{method: "OPTIONS"} = msg, from, state) do
     ok =
       build_response(msg, 200, "OK", state)
-      |> without_contact()
       |> Message.put_header("allow", "INVITE, ACK, CANCEL, BYE, OPTIONS")
 
     send_raw(Message.to_iodata(ok), from, state, "200 OK на OPTIONS → #{peer_str(from)}")
@@ -1108,8 +1107,6 @@ defmodule SipPhone.SIP.Stack do
     |> Message.put_header("content-length", "0")
   end
 
-  defp without_contact(msg), do: msg
-
   defp put_via(msg, branch) do
     {ip_str, port} = local_endpoint()
     Message.put_header(msg, "via", "SIP/2.0/UDP #{ip_str}:#{port};branch=#{branch};rport")
@@ -1237,10 +1234,10 @@ defmodule SipPhone.SIP.Stack do
   defp server_host(%{server: {h, _}}), do: h
   defp server_host(_), do: "localhost"
 
-  defp server_target(%{server: {h, p}} = state) do
+  defp server_target(%{server: {h, p}}) do
     case resolve_host(h) do
       {:ok, ip} -> {ip, p}
-      {:error, _} -> {{127, 0, 0, 1}, p} |> tap(fn _ -> state end)
+      {:error, _} -> {{127, 0, 0, 1}, p}
     end
   end
 
@@ -1253,36 +1250,22 @@ defmodule SipPhone.SIP.Stack do
   end
 
   # цель в диалоге: Contact из 200 OK (или входящего INVITE), иначе — источник пакета
-  defp dialog_target(msg, from, state) do
+  defp dialog_target(msg, from) do
     case addr_uri(msg, "contact") do
       nil ->
         from
 
       uri ->
-        case sip_uri_hostport(uri) do
-          {:ok, {host, port}} ->
-            case resolve_host(host) do
-              {:ok, ip} -> {ip, port}
-              {:error, _} -> from
-            end
-
-          :error ->
-            from
+        with {:ok, {host, port}} <- sip_uri_hostport(uri),
+             {:ok, ip} <- resolve_host(host) do
+          {ip, port}
+        else
+          _ -> from
         end
-        |> tap(fn _ -> state end)
     end
   end
 
-  defp contact_of(msg, from) do
-    case addr_uri(msg, "contact") do
-      nil ->
-        nil
-
-      uri ->
-        uri
-        |> tap(fn _ -> from end)
-    end
-  end
+  defp contact_of(msg), do: addr_uri(msg, "contact")
 
   @doc false
   def sip_uri_hostport(uri) do
@@ -1296,13 +1279,8 @@ defmodule SipPhone.SIP.Stack do
 
     case String.split(authority, ":") do
       [host] ->
-        port =
-          case :inet.getaddr(String.to_charlist(host), :inet) do
-            {:ok, _} -> 5060
-            _ -> 5060
-          end
-
-        {:ok, {host, port}}
+        # порт по умолчанию для sip — 5060 (§19.1.4)
+        {:ok, {host, 5060}}
 
       [host, p] ->
         case Integer.parse(p) do
